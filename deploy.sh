@@ -1,6 +1,3 @@
-#!/bin/bash
-# Stops the script if any command fails
-set -e
 
 echo "---------- VARIABLES ----------"
 
@@ -143,5 +140,3 @@ az vm create \
   --location "$LOCATION" \
   --output json
 
-echo ""
-echo "Deployment Complete. VM '$VM_NAME' is running."
