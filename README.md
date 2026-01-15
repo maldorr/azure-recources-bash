@@ -1,64 +1,77 @@
-Step 1: Set Environment Variables
-Copy and paste this block into your terminal. These variables control the naming of all resources to ensure they match the OpenStack equivalents.
+# AZURE-FULL-STACK-VM-WITH-VOLUME
+## Bash Script (Azure CLI)
+This project replicates an OpenStack full-stack deployment (Network, Security, VM, Volume, Floating IP) using native Azure CLI (Bash).
 
-Bash
+---
 
-# Location & Group
-export LOCATION="switzerlandnorth"
-export RESOURCE_GROUP="RG-OpenStack-Replica"
+### ---------- PREREQUISITES ----------
+```Bash
+# Login to Azure
+az login
 
-# Network (Neutron equivalents)
-export VNET_NAME="my_private_network"
-export SUBNET_NAME="my_subnet"
-export PUBLIC_IP_NAME="my_floating_ip"
-export NSG_NAME="allow_ssh_ping"
-export NIC_NAME="my_interface"
+# Select your subscription (if needed)
+# az account set --subscription "your-id-here"
+```
+### ---------- VARIABLES ----------
+```Bash
 
-# Storage (Cinder equivalent)
-export DISK_NAME="my_extra_disk"
-export DISK_SIZE_GB=1
+LOCATION="switzerlandnorth"
+RESOURCE_GROUP="RG-OpenStack-Replica"
 
-# VM (Nova equivalent)
-export VM_NAME="My_Full_Server"
-export VM_SIZE="Standard_B1s"
-export IMAGE_URN="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
-export ADMIN_USER="azureuser"
-Step 2: Create Resource Group
-Create the container for all your resources.
+# Network Names (Matching HEAT: my_net, my_subnet)
+VNET_NAME="my_private_network"
+SUBNET_NAME="my_subnet"
+PUBLIC_IP_NAME="my_floating_ip"
+NSG_NAME="allow_ssh_ping"
+NIC_NAME="my_interface"
 
-Bash
+# Storage Name (Matching HEAT: my_data_volume)
+DISK_NAME="my_extra_disk"
+DISK_SIZE_GB=1
+
+# VM Details (Matching HEAT: My_Full_Server)
+VM_NAME="My_Full_Server"
+VM_SIZE="Standard_B1s"  # Similar to m1.tiny
+IMAGE_URN="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+
+# Credentials
+ADMIN_USER="azureuser"
+ADMIN_PASSWORD="SecurePass!123"
+```
+### ---------- RESOURCE GROUP ----------
+```Bash
 
 az group create \
-  --name $RESOURCE_GROUP \
-  --location $LOCATION
-Step 3: Configure Networking (Neutron)
-3.1 Create VNet and Subnet
-Creates my_private_network (192.168.0.0/16) and my_subnet (192.168.100.0/24).
+  --name "$RESOURCE_GROUP" \
+  --location "$LOCATION"
+```
+### ---------- VNET + SUBNET ----------
+```Bash
 
-Bash
-
+# 1. Create VNet and Subnet (192.168.100.0/24) in one step
 az network vnet create \
-  --resource-group $RESOURCE_GROUP \
-  --name $VNET_NAME \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$VNET_NAME" \
   --address-prefix "192.168.0.0/16" \
-  --subnet-name $SUBNET_NAME \
+  --subnet-name "$SUBNET_NAME" \
   --subnet-prefix "192.168.100.0/24" \
-  --location $LOCATION
-3.2 Create Security Group (NSG) & Rules
-Matches OpenStack Security Groups. We allow SSH (22) and ICMP (Ping).
+  --location "$LOCATION"
+```
+### ---------- SECURITY GROUP (NSG) ----------
+```Bash
 
-Bash
-
-# Create NSG
+# Create the NSG container
 az network nsg create \
-  --resource-group $RESOURCE_GROUP \
-  --name $NSG_NAME \
-  --location $LOCATION
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$NSG_NAME" \
+  --location "$LOCATION"
+```
+```Bash
 
-# Rule: Allow SSH
+# Rule 1: Allow SSH (Port 22) - Matches HEAT tcp 22
 az network nsg rule create \
-  --resource-group $RESOURCE_GROUP \
-  --nsg-name $NSG_NAME \
+  --resource-group "$RESOURCE_GROUP" \
+  --nsg-name "$NSG_NAME" \
   --name "Allow-SSH" \
   --protocol Tcp \
   --direction Inbound \
@@ -67,80 +80,73 @@ az network nsg rule create \
   --destination-port-ranges 22 \
   --access Allow
 
-# Rule: Allow Ping (ICMP)
+# Rule 2: Allow ICMP (Ping) - Matches HEAT protocol: icmp
 az network nsg rule create \
-  --resource-group $RESOURCE_GROUP \
-  --nsg-name $NSG_NAME \
+  --resource-group "$RESOURCE_GROUP" \
+  --nsg-name "$NSG_NAME" \
   --name "Allow-ICMP" \
   --protocol Icmp \
   --direction Inbound \
   --priority 1002 \
   --source-address-prefixes "*" \
   --access Allow
-3.3 Create Public IP (Floating IP)
-Allocates a static public IP address.
-
-Bash
+```
+### ---------- PUBLIC IP (FLOATING IP) ----------
+```Bash
 
 az network public-ip create \
-  --resource-group $RESOURCE_GROUP \
-  --name $PUBLIC_IP_NAME \
-  --location $LOCATION \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$PUBLIC_IP_NAME" \
+  --location "$LOCATION" \
   --allocation-method Static \
   --sku Standard
-3.4 Create Network Interface (Port)
-Binds the Subnet, Security Group, and Public IP together into a virtual interface.
+```
 
-Bash
+### ---------- NETWORK INTERFACE (NIC) ----------
+```Bash
 
 az network nic create \
-  --resource-group $RESOURCE_GROUP \
-  --name $NIC_NAME \
-  --vnet-name $VNET_NAME \
-  --subnet $SUBNET_NAME \
-  --network-security-group $NSG_NAME \
-  --public-ip-address $PUBLIC_IP_NAME \
-  --location $LOCATION
-Step 4: Create Storage (Cinder)
-Creates an empty 1GB managed disk that will be attached to the VM later.
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$NIC_NAME" \
+  --vnet-name "$VNET_NAME" \
+  --subnet "$SUBNET_NAME" \
+  --network-security-group "$NSG_NAME" \
+  --public-ip-address "$PUBLIC_IP_NAME" \
+  --location "$LOCATION"
+```
+### ---------- STORAGE (EXTRA VOLUME) ----------
+```Bash
 
-Bash
-
+# Matches HEAT resource: my_data_volume (Size: 1GB)
 az disk create \
-  --resource-group $RESOURCE_GROUP \
-  --name $DISK_NAME \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$DISK_NAME" \
   --size-gb $DISK_SIZE_GB \
   --sku Standard_LRS \
-  --location $LOCATION
-Step 5: Deploy Virtual Machine (Nova)
-Creates the Ubuntu VM.
+  --location "$LOCATION"
+```
+### ---------- VM CONFIGURATION & CREATION ----------
+```Bash
 
---nics: Attaches the Interface created in Step 3.4.
-
---attach-data-disks: Attaches the Volume created in Step 4.
-
-Note: Replace SecurePass!123 with your desired password.
-
-Bash
+# 1. Configure VM Base, OS, Image, NIC, and attach Volume
+# Unlike PowerShell, Azure CLI handles this in one command.
 
 az vm create \
-  --resource-group $RESOURCE_GROUP \
-  --name $VM_NAME \
-  --size $VM_SIZE \
-  --image $IMAGE_URN \
-  --nics $NIC_NAME \
-  --attach-data-disks $DISK_NAME \
-  --admin-username $ADMIN_USER \
-  --admin-password "SecurePass!123" \
-  --location $LOCATION
-Verification
-To verify the deployment, run the following command to see your public IP:
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$VM_NAME" \
+  --size "$VM_SIZE" \
+  --image "$IMAGE_URN" \
+  --nics "$NIC_NAME" \
+  --attach-data-disks "$DISK_NAME" \
+  --admin-username "$ADMIN_USER" \
+  --admin-password "$ADMIN_PASSWORD" \
+  --location "$LOCATION"
+```
+### ---------- OUTPUTS ----------
+```Bash
 
-Bash
+FINAL_IP=$(az network public-ip show --resource-group "$RESOURCE_GROUP" --name "$PUBLIC_IP_NAME" --query "ipAddress" --output tsv)
 
-az network public-ip show \
-  --resource-group $RESOURCE_GROUP \
-  --name $PUBLIC_IP_NAME \
-  --query "ipAddress" \
-  --output tsv
-You can now SSH into your VM using that IP: ssh azureuser@<YOUR_PUBLIC_IP>
+echo "✅ VM Created Successfully"
+echo "SSH Command: ssh $ADMIN_USER@$FINAL_IP"
+echo "Volume Status: Attached (Managed by Azure)"
