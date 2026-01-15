@@ -1,142 +1,270 @@
+#!/bin/bash
 
-echo "---------- VARIABLES ----------"
+# .DESCRIPTION
+#    This script prompts the user for all necessary configuration details, presents a summary for review,
+#    and upon confirmation, deploys the resources to Azure using the Azure CLI.
 
-LOCATION="switzerlandnorth"
-RESOURCE_GROUP="RG-OpenStack-Replica"
+# -----------------------------------------------------------------------------
+# COLORS & FORMATTING
+# -----------------------------------------------------------------------------
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
 
-# Network Names (Matching HEAT: my_net, my_subnet)
-VNET_NAME="my_private_network"
-SUBNET_NAME="my_subnet"
-PUBLIC_IP_NAME="my_floating_ip"
-NSG_NAME="allow_ssh_ping"
-NIC_NAME="my_interface"
+echo -e "${CYAN}=== AZURE INFRASTRUCTURE DEPLOYMENT WIZARD ===${NC}"
 
-# Storage Name (Matching HEAT: my_data_volume)
-DISK_NAME="my_extra_disk"
-DISK_SIZE_GB=1
+# -----------------------------------------------------------------------------
+# 1. AUTHENTICATION & SUBSCRIPTION
+# -----------------------------------------------------------------------------
+echo -e "${YELLOW}Step 1: Authentication${NC}"
 
-# VM Details (Matching HEAT: My_Full_Server)
-VM_NAME="My_Full_Server"
-VM_SIZE="Standard_B1s" # Similar to m1.tiny
-IMAGE_URN="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+if az account show > /dev/null 2>&1; then
+    echo -e "${GREEN}Already logged in.${NC}"
+else
+    az login -o none
+fi
 
-# Credentials
-ADMIN_USER="azureuser"
-ADMIN_PASSWORD="SecurePass!123"
+read -p "Enter your Subscription ID (leave empty to use default): " subscriptionId
+if [[ -n "$subscriptionId" ]]; then
+    az account set --subscription "$subscriptionId"
+    echo -e "${GREEN}Subscription set to: $subscriptionId${NC}"
+fi
 
-echo "---------- RESOURCE GROUP ----------"
-echo "Creating Resource Group: $RESOURCE_GROUP..."
+# -----------------------------------------------------------------------------
+# 2. INPUT COLLECTION
+# -----------------------------------------------------------------------------
 
-az group create \
-  --name "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --output none
+# --- Resource Group ---
+echo -e "\n${YELLOW}Step 2: Resource Group Details${NC}"
+while [[ -z "$rgName" ]]; do
+    read -p "Enter Resource Group Name (e.g., RG-Project): " rgName
+done
 
-echo "---------- VNET + SUBNET ----------"
-echo "Creating VNet and Subnet (192.168.100.0/24)..."
+while [[ -z "$location" ]]; do
+    read -p "Enter Location (e.g., switzerlandnorth, eastus): " location
+done
 
-# In CLI, we can create the VNet and the first Subnet in one command
-az network vnet create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VNET_NAME" \
-  --address-prefix "192.168.0.0/16" \
-  --subnet-name "$SUBNET_NAME" \
-  --subnet-prefix "192.168.100.0/24" \
-  --location "$LOCATION" \
-  --output none
+# --- Networking ---
+echo -e "\n${YELLOW}Step 3: Network Configuration${NC}"
+read -p "Enter Virtual Network Name (e.g., MyVNet): " vnetName
+read -p "Enter VNet Address Prefix (default: 10.0.0.0/16): " vnetPrefix
+vnetPrefix=${vnetPrefix:-"10.0.0.0/16"}
 
-echo "---------- SECURITY GROUP (NSG) ----------"
-echo "Creating NSG and Rules..."
+read -p "Enter Subnet Name (e.g., MySubnet): " subnetName
+read -p "Enter Subnet Address Prefix (default: 10.0.1.0/24): " subnetPrefix
+subnetPrefix=${subnetPrefix:-"10.0.1.0/24"}
 
-# Create the NSG container
-az network nsg create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$NSG_NAME" \
-  --location "$LOCATION" \
-  --output none
+# --- Security (NSG) ---
+echo -e "\n${YELLOW}Step 4: Security (NSG)${NC}"
+read -p "Enter Network Security Group Name (e.g., MyNSG): " nsgName
 
-# Rule 1: Allow SSH (Port 22) - Matches HEAT tcp 22
-az network nsg rule create \
-  --resource-group "$RESOURCE_GROUP" \
-  --nsg-name "$NSG_NAME" \
-  --name "Allow-SSH" \
-  --protocol Tcp \
-  --direction Inbound \
-  --priority 1001 \
-  --source-address-prefixes "*" \
-  --destination-address-prefixes "*" \
-  --destination-port-ranges 22 \
-  --access Allow \
-  --output none
+declare -a nsgRules
+while true; do
+    read -p "Add an inbound security rule? (y/n): " addRule
+    if [[ "$addRule" != "y" ]]; then break; fi
 
-# Rule 2: Allow ICMP (Ping) - Matches HEAT protocol: icmp
-az network nsg rule create \
-  --resource-group "$RESOURCE_GROUP" \
-  --nsg-name "$NSG_NAME" \
-  --name "Allow-ICMP" \
-  --protocol Icmp \
-  --direction Inbound \
-  --priority 1002 \
-  --source-address-prefixes "*" \
-  --destination-address-prefixes "*" \
-  --destination-port-ranges "*" \
-  --access Allow \
-  --output none
+    read -p " - Rule Name (e.g., AllowSSH): " ruleName
+    read -p " - Destination Port (e.g., 22): " rulePort
+    read -p " - Protocol (Tcp/Udp/Icmp/Any) [default: Tcp]: " ruleProto
+    ruleProto=${ruleProto:-"Tcp"}
+    read -p " - Priority (100-4096) [default: 1000]: " rulePriority
+    rulePriority=${rulePriority:-1000}
 
-echo "---------- PUBLIC IP (FLOATING IP) ----------"
-echo "Creating Public IP..."
+    # Store rule as a delimited string "Name:Port:Proto:Priority"
+    nsgRules+=("$ruleName:$rulePort:$ruleProto:$rulePriority")
+done
 
-az network public-ip create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$PUBLIC_IP_NAME" \
-  --location "$LOCATION" \
-  --allocation-method Static \
-  --sku Standard \
-  --output none
+# --- Public IP ---
+echo -e "\n${YELLOW}Step 5: Public IP${NC}"
+read -p "Enter Public IP Name (e.g., MyPublicIP): " pipName
+read -p "Enter SKU (Basic/Standard) [default: Standard]: " pipSku
+pipSku=${pipSku:-"Standard"}
 
-echo "---------- NETWORK INTERFACE (NIC) ----------"
-echo "Creating NIC and binding Subnet, NSG, and Public IP..."
+if [[ "$pipSku" == "Standard" ]]; then
+    pipAlloc="Static"
+    echo -e "${GRAY}Standard SKU requires Static allocation. Setting to Static automatically.${NC}"
+else
+    read -p "Enter Allocation Method (Static/Dynamic) [default: Dynamic]: " pipAlloc
+    pipAlloc=${pipAlloc:-"Dynamic"}
+fi
 
-az network nic create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$NIC_NAME" \
-  --vnet-name "$VNET_NAME" \
-  --subnet "$SUBNET_NAME" \
-  --network-security-group "$NSG_NAME" \
-  --public-ip-address "$PUBLIC_IP_NAME" \
-  --location "$LOCATION" \
-  --output none
+# --- NIC ---
+echo -e "\n${YELLOW}Step 6: Network Interface${NC}"
+read -p "Enter NIC Name (e.g., MyNIC): " nicName
 
-echo "---------- STORAGE (EXTRA VOLUME) ----------"
-echo "Creating Extra Disk (1GB)..."
+# --- Virtual Machine ---
+echo -e "\n${YELLOW}Step 7: Virtual Machine${NC}"
+read -p "Enter VM Name (No underscores! e.g., My-VM): " vmName
+while [[ -z "$vmSize" ]]; do
+    read -p "Enter VM Size (e.g., Standard_B1s, Standard_D2s_v3): " vmSize
+done
 
-# Matches HEAT resource: my_data_volume
-az disk create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$DISK_NAME" \
-  --size-gb $DISK_SIZE_GB \
-  --sku Standard_LRS \
-  --location "$LOCATION" \
-  --output none
+echo "Select OS Type:"
+echo "1. Linux (Ubuntu 22.04 LTS)"
+echo "2. Windows (Server 2019 Datacenter)"
+read -p "Enter choice (1 or 2): " osChoice
 
-echo "---------- VM CONFIGURATION & CREATION ----------"
-echo "Creating VM (Ubuntu 22.04)..."
+read -p "Enter Admin Username (e.g., azureuser): " adminUser
+read -s -p "Enter Admin Password: " adminPass
+echo "" # Newline after silent input
 
-# This command combines the VM Config steps:
-# 1. Sets OS/Image
-# 2. Uses the pre-created NIC (--nics)
-# 3. Attaches the extra volume (--attach-data-disks)
-# 4. Sets credentials
+# --- Storage / Data Disks ---
+echo -e "\n${YELLOW}Step 8: Storage Options${NC}"
+read -p "Do you want to attach an extra data disk? (y/n): " addDataDisk
+if [[ "$addDataDisk" == "y" ]]; then
+    read -p " - Enter Disk Name (e.g., DataDisk_01): " diskName
+    read -p " - Enter Size in GB (e.g., 10): " diskSize
+    read -p " - Enter SKU (Standard_LRS/Premium_LRS) [default: Standard_LRS]: " diskSku
+    diskSku=${diskSku:-"Standard_LRS"}
+fi
 
-az vm create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --size "$VM_SIZE" \
-  --image "$IMAGE_URN" \
-  --nics "$NIC_NAME" \
-  --attach-data-disks "$DISK_NAME" \
-  --admin-username "$ADMIN_USER" \
-  --admin-password "$ADMIN_PASSWORD" \
-  --location "$LOCATION" \
-  --output json
+read -p "Do you want to create a separate Storage Account? (y/n): " addStorageAccount
+if [[ "$addStorageAccount" == "y" ]]; then
+    read -p " - Enter Storage Account Name (lowercase, numbers only): " saName
+    read -p " - Enter SKU (Standard_LRS/Standard_GRS) [default: Standard_LRS]: " saSku
+    saSku=${saSku:-"Standard_LRS"}
+fi
 
+# -----------------------------------------------------------------------------
+# 3. REVIEW & CONFIRMATION
+# -----------------------------------------------------------------------------
+clear
+echo -e "${CYAN}==========================================${NC}"
+echo -e "${CYAN}       CONFIGURATION SUMMARY              ${NC}"
+echo -e "${CYAN}==========================================${NC}"
+
+echo -ne "Resource Group: "; echo -e "${GREEN}$rgName${NC}"
+echo -ne "Location:       "; echo -e "${GREEN}$location${NC}"
+echo "------------------------------------------"
+echo "VNet:           $vnetName ($vnetPrefix)"
+echo "Subnet:         $subnetName ($subnetPrefix)"
+echo "NSG:            $nsgName"
+if [ ${#nsgRules[@]} -gt 0 ]; then
+    for rule in "${nsgRules[@]}"; do
+        IFS=':' read -r rName rPort rProto rPrio <<< "$rule"
+        echo -e "${GRAY}  - Rule: $rName | Port: $rPort | Pri: $rPrio${NC}"
+    done
+else
+    echo -e "${GRAY}  - No extra rules defined.${NC}"
+fi
+echo "------------------------------------------"
+echo "Public IP:      $pipName ($pipSku / $pipAlloc)"
+echo "NIC:            $nicName"
+echo "------------------------------------------"
+echo "VM Name:        $vmName"
+echo "VM Size:        $vmSize"
+if [[ "$osChoice" == "1" ]]; then osLabel="Linux (Ubuntu)"; else osLabel="Windows"; fi
+echo "OS Type:        $osLabel"
+echo "Admin User:     $adminUser"
+echo "------------------------------------------"
+if [[ "$addDataDisk" == "y" ]]; then
+    echo -e "${YELLOW}Extra Disk:     $diskName | $diskSize GB | $diskSku${NC}"
+fi
+if [[ "$addStorageAccount" == "y" ]]; then
+    echo -e "${YELLOW}Storage Acct:   $saName | $saSku${NC}"
+fi
+echo -e "${CYAN}==========================================${NC}"
+
+read -p "Is this configuration correct? (yes/no): " confirm
+
+if [[ "$confirm" != "yes" ]]; then
+    echo -e "${RED}Deployment cancelled by user.${NC}"
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# 4. DEPLOYMENT
+# -----------------------------------------------------------------------------
+echo -e "\n${CYAN}Starting Deployment... this may take a few minutes.${NC}"
+
+# 1. Resource Group
+echo "Creating Resource Group '$rgName'..."
+az group create --name "$rgName" --location "$location" -o none
+
+# 2. Networking
+echo "Creating Network Resources..."
+# Create VNet and Subnet in one go
+az network vnet create --resource-group "$rgName" --name "$vnetName" --address-prefix "$vnetPrefix" --subnet-name "$subnetName" --subnet-prefix "$subnetPrefix" -o none
+
+# 3. NSG & Rules
+echo "Creating Security Group '$nsgName'..."
+az network nsg create --resource-group "$rgName" --name "$nsgName" -o none
+
+if [ ${#nsgRules[@]} -gt 0 ]; then
+    for rule in "${nsgRules[@]}"; do
+        IFS=':' read -r rName rPort rProto rPrio <<< "$rule"
+        echo "  Adding Rule: $rName"
+        az network nsg rule create --resource-group "$rgName" --nsg-name "$nsgName" --name "$rName" --priority "$rPrio" --destination-port-ranges "$rPort" --protocol "$rProto" --access Allow --direction Inbound -o none
+    done
+fi
+
+# 4. Public IP
+echo "Creating Public IP '$pipName'..."
+az network public-ip create --resource-group "$rgName" --name "$pipName" --sku "$pipSku" --allocation-method "$pipAlloc" -o none
+
+# 5. NIC
+echo "Creating Network Interface '$nicName'..."
+az network nic create --resource-group "$rgName" --name "$nicName" --vnet-name "$vnetName" --subnet "$subnetName" --network-security-group "$nsgName" --public-ip-address "$pipName" -o none
+
+# 6. Storage Account (Optional)
+if [[ "$addStorageAccount" == "y" ]]; then
+    echo "Creating Storage Account '$saName'..."
+    az storage account create --resource-group "$rgName" --name "$saName" --sku "$saSku" --location "$location" --kind StorageV2 -o none
+fi
+
+# 7. Data Disk (Optional)
+diskId=""
+if [[ "$addDataDisk" == "y" ]]; then
+    echo "Creating Data Disk '$diskName'..."
+    diskId=$(az disk create --resource-group "$rgName" --name "$diskName" --size-gb "$diskSize" --sku "$diskSku" --location "$location" --query "id" -o tsv)
+fi
+
+# 8. VM Configuration & Creation
+echo -e "${CYAN}Creating VM... (This is the longest step)${NC}"
+
+# Determine Image URN
+if [[ "$osChoice" == "1" ]]; then
+    # Ubuntu 22.04 LTS Gen2
+    imageUrn="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+else
+    # Windows Server 2019 Datacenter
+    imageUrn="MicrosoftWindowsServer:WindowsServer:2019-Datacenter:latest"
+fi
+
+# Build the create command
+# Note: Since we pre-created the NIC, we pass --nics. We do not need to pass subnet/vnet here.
+cmd="az vm create --resource-group $rgName --name $vmName --size $vmSize --image $imageUrn --admin-username $adminUser --admin-password $adminPass --nics $nicName --location $location"
+
+# Attach data disk if created
+if [[ -n "$diskId" ]]; then
+    cmd="$cmd --attach-data-disks $diskId"
+fi
+
+# Execute VM creation
+eval $cmd -o none
+
+# -----------------------------------------------------------------------------
+# 5. FINAL OUTPUT
+# -----------------------------------------------------------------------------
+echo -e "\n${GREEN}==========================================${NC}"
+echo -e "${GREEN}       DEPLOYMENT SUCCESSFUL!             ${NC}"
+echo -e "${GREEN}==========================================${NC}"
+
+# Retrieve the actual IP
+ipAddress=$(az network public-ip show --resource-group "$rgName" --name "$pipName" --query "ipAddress" -o tsv)
+
+if [[ -z "$ipAddress" ]]; then
+    echo "IP Address: (Dynamic IP will be assigned shortly)"
+else
+    echo -e "Public IP: ${CYAN}$ipAddress${NC}"
+fi
+
+if [[ "$osChoice" == "1" ]]; then
+    echo "Connect via SSH: ssh $adminUser@$ipAddress"
+else
+    echo "Connect via RDP: $ipAddress"
+fi
+echo "=========================================="
