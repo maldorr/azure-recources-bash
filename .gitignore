@@ -1,0 +1,13 @@
+# Azure
+.azure/
+azure.err
+.cloud-console-history
+
+# System
+.DS_Store
+Thumbs.db
+
+# Secrets (Safety net)
+secrets.sh
+*.pem
+*.key
