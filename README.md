@@ -16,7 +16,7 @@ az login
 ```Bash
 
 LOCATION="switzerlandnorth"
-RESOURCE_GROUP="RG-OpenStack-Replica"
+RESOURCE_GROUP="azure-recources-bash"
 
 # Network Names (Matching HEAT: my_net, my_subnet)
 VNET_NAME="my_private_network"
