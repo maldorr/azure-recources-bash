@@ -128,36 +128,17 @@ az disk create \
 ### ---------- VM CONFIGURATION & CREATION ----------
 ```Bash
 
-echo -e "${CYAN}Creating VM... (This is the longest step)${NC}"
-
-# Determine Image URN
-if [[ "$OS_CHOICE" == "1" ]]; then
-    IMAGE_URN="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
-else
-    IMAGE_URN="MicrosoftWindowsServer:WindowsServer:2019-Datacenter:latest"
-fi
-
-# Build the command dynamically
-# We added --authentication-type password to fix the RSA key error
-CMD="az vm create \
-    --resource-group $RG_NAME \
-    --name $VM_NAME \
-    --image $IMAGE_URN \
-    --size $VM_SIZE \
-    --admin-username $ADMIN_USER \
-    --admin-password $ADMIN_PASSWORD \
-    --authentication-type password \
-    --nics $NIC_NAME \
-    --location $LOCATION \
-    --output none"
-
-# Add data disk argument if selected
-if [[ "$ADD_DATA_DISK" == "y" ]]; then
-    CMD="$CMD --attach-data-disks $DISK_NAME"
-fi
-
-# Execute the VM command
-eval $CMD
+az vm create \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$VM_NAME" \
+  --size "$VM_SIZE" \
+  --image "$IMAGE_URN" \
+  --nics "$NIC_NAME" \
+  --attach-data-disks "$DISK_NAME" \
+  --admin-username "$ADMIN_USER" \
+  --admin-password "$ADMIN_PASSWORD" \
+  --authentication-type password \
+  --location "$LOCATION"
 ```
 ### ---------- OUTPUTS ----------
 ```Bash
